@@ -1,0 +1,17 @@
+[package]
+name = "byesni"
+version = "0.1.0"
+edition = "2021"
+description = "Splits TLS ClientHello segments on a Linux gateway to defeat SNI-based DPI resets"
+
+# Both are Linux-only in practice; gated so `cargo test` still runs the
+# packet logic on a development Mac.
+[target.'cfg(target_os = "linux")'.dependencies]
+nfq = "0.2"
+socket2 = { version = "0.5", features = ["all"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+strip = true

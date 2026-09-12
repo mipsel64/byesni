@@ -1,0 +1,4 @@
+# Hostnames whose ClientHello gets split. Suffix match, so steampowered.com
+# also covers store.steampowered.com. Reloaded automatically on change.
+steampowered.com
+steamcommunity.com

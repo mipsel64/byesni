@@ -1,0 +1,40 @@
+# byesni packet selection. Edit the three defines, then: nft -f byesni.nft
+#
+# Only the opening packets of matching flows are sent to userspace. Everything
+# else — including all bulk data on the same connections — stays on the kernel
+# fast path and never touches byesni.
+
+define wan     = "eth0"
+define sources = { 192.168.10.0/24 }
+# Add the gateway's own WAN address to $sources to also process traffic the
+# gateway itself originates. Useful for testing from the gateway.
+
+table inet byesni {
+    comment "managed by byesni"
+
+    chain outbound {
+        type filter hook postrouting priority 99; policy accept;
+
+        # Priority 99 runs before srcnat (100), so source addresses here are
+        # still pre-NAT. That matters: byesni's raw sends carry the same
+        # pre-NAT 5-tuple, so conntrack matches them to the existing entry and
+        # applies the same masquerade binding as the packet they replace.
+        meta nfproto != ipv4 return
+        oifname != $wan return
+        ip saddr != $sources return
+        ct direction != original return
+        meta l4proto != tcp return
+        tcp dport != 443 return
+
+        # byesni marks its own raw sends; without this they would be queued
+        # back to it in a loop.
+        meta mark & 0x40000000 != 0 return
+        tcp flags & (fin | rst | urg) != 0 return
+
+        # A ClientHello is packet 3 of a flow. The window is generous so a
+        # retransmitted or delayed handshake is still caught; bulk data is not.
+        # 200 must match byesni --queue. "bypass" means that if byesni is not
+        # running, packets are accepted normally rather than dropped.
+        ct original packets 1-8 counter queue num 200 bypass
+    }
+}

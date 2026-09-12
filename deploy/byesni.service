@@ -1,0 +1,24 @@
+[Unit]
+Description=byesni TLS ClientHello splitter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStartPre=/usr/sbin/nft -f /etc/byesni/byesni.nft
+ExecStart=/usr/local/bin/byesni --queue 200 --split 3 --hosts /etc/byesni/hosts
+ExecStopPost=-/usr/sbin/nft delete table inet byesni
+Restart=on-failure
+RestartSec=2
+
+DynamicUser=yes
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_NETLINK AF_INET
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target
