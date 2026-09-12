@@ -152,8 +152,8 @@ On the gateway, as root:
 ```sh
 install -m755 byesni /usr/local/bin/byesni
 install -d -m755 /etc/byesni
-install -m644 deploy/byesni.nft deploy/hosts /etc/byesni/
-install -m644 deploy/byesni.service /etc/systemd/system/
+install -m644 examples/byesni.nft examples/hosts /etc/byesni/
+install -m644 examples/byesni.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now byesni
 ```
 
