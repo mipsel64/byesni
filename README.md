@@ -76,23 +76,6 @@ Cost is bounded by the `ct original packets 1-8` window: at most eight packets
 per new connection reach userspace, and only for flows from configured sources
 to port 443. Bulk transfer never leaves the kernel.
 
-### Why not eBPF
-
-The obvious reference implementations attach a `sockops` program to a cgroup.
-That hook only fires for sockets on the machine running it, so it cannot see
-forwarded traffic — on a gateway there is no local socket to attach to.
-
-TC-BPF at `clsact` egress does see forwarded packets, but splitting one skb into
-two is the single thing eBPF is worst at: no allocation, manual incremental
-checksum fixups, and verifier limits on the parsing loop. NFQUEUE does the same
-job in userspace where a split is two `Vec`s, and the packet-count window keeps
-the throughput cost equivalent.
-
-MSS clamping — letting the kernel do the splitting for you — is worth testing
-first because it needs no code at all. It failed here: the smallest MSS the
-stack will negotiate still produced a first segment large enough to classify.
-`tools/dpi-probe.py` tests this shape too.
-
 ## Measure before deploying
 
 ```sh
