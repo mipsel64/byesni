@@ -70,7 +70,8 @@ before the queue rule, so they pass through once.
 
 **`queue ... bypass`.** If byesni is not running, matching packets are accepted
 normally instead of dropped. The failure mode is "back to blocked", never "no
-internet".
+internet". byesni also enables fail-open on the queue itself, so when the
+kernel queue is full packets pass through unsplit instead of being dropped.
 
 Cost is bounded by the `ct original packets 1-8` window: at most eight packets
 per new connection reach userspace, and only for flows from configured sources
@@ -149,7 +150,7 @@ and drops the nftables table again on stop.
 | --- | --- |
 | `/etc/byesni/byesni.nft` | `$wan` — interface facing the ISP; `$sources` — client addresses to process |
 | `/etc/byesni/hosts` | one hostname per line, suffix match, `#` comments; reloaded automatically when the file changes |
-| `ExecStart` in the unit | `--split N` — bytes in the first segment; `--queue N` must match the nft rule |
+| `ExecStart` in the unit | `--split N` — bytes in the first segment; `--queue N` must match the nft rule; `--mtu N` — outgoing interface MTU, default 1500, set it to 1492 on a PPPoE WAN |
 
 `--split` is the one value that is a property of someone else's equipment
 rather than of this software. Whatever threshold the inspector uses can change,
@@ -165,6 +166,9 @@ journalctl -u byesni -f          # one line per split
 nft list chain inet byesni outbound   # counter shows packets reaching the queue
 python3 tools/dpi-probe.py blocked.example
 ```
+
+Each split line records the hostname a LAN client reached, so the journal is a
+record of visits to listed sites.
 
 After deployment the probe's plain `whole ClientHello` test should succeed on
 its own, because the gateway is now doing the splitting. A hostname *not* on the
@@ -190,4 +194,7 @@ forwarding.
   reassembles unconditionally, is unaffected.
 - Effectiveness is a property of the specific network in front of you and can
   change without notice. The probe is the only answer to "does this work here".
-- No license is set. Add one before publishing.
+
+## License
+
+MIT, see LICENSE.

@@ -16,10 +16,9 @@ use {
     std::net::{Ipv4Addr, SocketAddrV4},
 };
 
-/// Matches `meta mark & 0x40000000` in deploy/byesni.nft, so our own raw
+/// Matches `meta mark & 0x40000000` in examples/byesni.nft, so our own raw
 /// sends are not queued back to us.
 const MARK: u32 = 0x4000_0000;
-const MTU: usize = 1500;
 #[cfg(target_os = "linux")]
 const IPPROTO_RAW: i32 = 255;
 
@@ -93,7 +92,9 @@ fn sni(payload: &[u8]) -> Option<&str> {
         i += 4;
         if kind == 0 {
             let name = be16(payload, i + 3)?;
-            return std::str::from_utf8(payload.get(i + 5..i + 5 + name)?).ok();
+            return std::str::from_utf8(payload.get(i + 5..i + 5 + name)?)
+                .ok()
+                .filter(|s| s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'));
         }
         i += len;
     }
@@ -102,7 +103,7 @@ fn sni(payload: &[u8]) -> Option<&str> {
 
 /// Rebuilds `pkt` as a `first`-byte segment followed by MTU-sized remainders,
 /// fixing length, IP id, sequence, PSH placement and both checksums.
-fn segments(pkt: &[u8], ihl: usize, doff: usize, first: usize) -> Vec<Vec<u8>> {
+fn segments(pkt: &[u8], ihl: usize, doff: usize, first: usize, mtu: usize) -> Vec<Vec<u8>> {
     let (header, payload) = pkt.split_at(ihl + doff);
     let seq = u32::from_be_bytes(header[ihl + 4..ihl + 8].try_into().unwrap());
     let id = u16::from_be_bytes(header[4..6].try_into().unwrap());
@@ -115,7 +116,7 @@ fn segments(pkt: &[u8], ihl: usize, doff: usize, first: usize) -> Vec<Vec<u8>> {
         let take = want.min(payload.len() - at);
         ranges.push(at..at + take);
         at += take;
-        want = MTU - ihl - doff;
+        want = mtu - ihl - doff;
     }
 
     ranges
@@ -146,7 +147,7 @@ fn segments(pkt: &[u8], ihl: usize, doff: usize, first: usize) -> Vec<Vec<u8>> {
 }
 
 #[cfg(target_os = "linux")]
-fn decide(pkt: &[u8], first: usize, hosts: &mut Hostlist, sock: &Socket) -> Verdict {
+fn decide(pkt: &[u8], first: usize, mtu: usize, hosts: &mut Hostlist, sock: &Socket) -> Verdict {
     let Some(&version) = pkt.first() else { return Verdict::Accept };
     let ihl = (version & 0xf) as usize * 4;
     if version >> 4 != 4 || ihl < 20 || pkt.len() < ihl + 20 || pkt[9] != 6 {
@@ -165,7 +166,7 @@ fn decide(pkt: &[u8], first: usize, hosts: &mut Hostlist, sock: &Socket) -> Verd
 
     let dst = Ipv4Addr::from(<[u8; 4]>::try_from(&pkt[16..20]).unwrap());
     let target = SockAddr::from(SocketAddrV4::new(dst, 0));
-    let parts = segments(pkt, ihl, doff, first);
+    let parts = segments(pkt, ihl, doff, first, mtu);
     for part in &parts {
         if let Err(e) = sock.send_to(part, &target) {
             eprintln!("byesni: raw send to {dst} failed, passing {name} through: {e}");
@@ -180,6 +181,7 @@ fn decide(pkt: &[u8], first: usize, hosts: &mut Hostlist, sock: &Socket) -> Verd
 fn main() -> io::Result<()> {
     let mut queue_num = 200;
     let mut first = 3;
+    let mut mtu = 1500;
     let mut path = String::from("/etc/byesni/hosts");
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -187,9 +189,10 @@ fn main() -> io::Result<()> {
         match flag.as_str() {
             "--queue" => queue_num = value.parse().expect("--queue takes a number"),
             "--split" => first = value.parse().expect("--split takes a number"),
+            "--mtu" => mtu = value.parse().expect("--mtu takes a number"),
             "--hosts" => path = value,
             _ => {
-                eprintln!("usage: byesni [--queue N] [--split N] [--hosts PATH]");
+                eprintln!("usage: byesni [--queue N] [--split N] [--mtu N] [--hosts PATH]");
                 std::process::exit(2);
             }
         }
@@ -202,10 +205,11 @@ fn main() -> io::Result<()> {
 
     let mut queue = Queue::open()?;
     queue.bind(queue_num)?;
+    queue.set_fail_open(queue_num, true)?;
     eprintln!("byesni: queue {queue_num}, split at {first}");
     loop {
         let mut msg = queue.recv()?;
-        let verdict = decide(msg.get_payload(), first, &mut hosts, &sock);
+        let verdict = decide(msg.get_payload(), first, mtu, &mut hosts, &sock);
         msg.set_verdict(verdict);
         queue.verdict(msg)?;
     }
@@ -263,6 +267,7 @@ mod tests {
     #[test]
     fn parses_sni_and_ignores_non_hellos() {
         assert_eq!(sni(&client_hello("store.steampowered.com")), Some("store.steampowered.com"));
+        assert_eq!(sni(&client_hello("evil\x1b[2J\n.steampowered.com")), None);
         assert_eq!(sni(b"GET / HTTP/1.1\r\n"), None);
         assert_eq!(sni(&[0x16, 0x03, 0x01, 0x00, 0x05, 0x01]), None);
         // Truncated at every length must refuse rather than panic or read past.
@@ -276,7 +281,7 @@ mod tests {
     fn splits_preserving_the_byte_stream() {
         let payload = client_hello("store.steampowered.com");
         let pkt = packet(&payload);
-        let parts = segments(&pkt, 20, 20, 3);
+        let parts = segments(&pkt, 20, 20, 3, 1500);
 
         assert_eq!(parts.len(), 2);
         assert_eq!(&parts[0][40..], &payload[..3]);
@@ -298,9 +303,9 @@ mod tests {
     fn chunks_oversized_payloads_under_the_mtu() {
         let mut payload = client_hello("store.steampowered.com");
         payload.resize(4000, 0x5a);
-        let parts = segments(&packet(&payload), 20, 20, 3);
+        let parts = segments(&packet(&payload), 20, 20, 3, 1500);
 
-        assert!(parts.iter().all(|p| p.len() <= MTU));
+        assert!(parts.iter().all(|p| p.len() <= 1500));
         let rebuilt: Vec<u8> = parts.iter().flat_map(|p| p[40..].to_vec()).collect();
         assert_eq!(rebuilt, payload, "split must preserve the byte stream exactly");
     }

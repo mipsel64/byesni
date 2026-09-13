@@ -37,24 +37,27 @@ def dns(host, server):
     finally:
         sock.close()
 
-    i, answers = 12, struct.unpack(">H", data[6:8])[0]
-    while data[i]:
-        i += data[i] + 1
-    i += 5
-    found = []
-    for _ in range(answers):
-        while data[i] >= 0xC0 or data[i]:
-            if data[i] >= 0xC0:
-                i += 2
-                break
+    try:
+        i, answers = 12, struct.unpack(">H", data[6:8])[0]
+        while data[i]:
             i += data[i] + 1
-        else:
-            i += 1
-        kind, _, _, length = struct.unpack(">HHIH", data[i:i + 10])
-        i += 10
-        if kind == 1:
-            found.append(socket.inet_ntoa(data[i:i + 4]))
-        i += length
+        i += 5
+        found = []
+        for _ in range(answers):
+            while data[i] >= 0xC0 or data[i]:
+                if data[i] >= 0xC0:
+                    i += 2
+                    break
+                i += data[i] + 1
+            else:
+                i += 1
+            kind, _, _, length = struct.unpack(">HHIH", data[i:i + 10])
+            i += 10
+            if kind == 1:
+                found.append(socket.inet_ntoa(data[i:i + 4]))
+            i += length
+    except (IndexError, struct.error, OSError):
+        return ["<malformed reply>"]
     return found or ["<no A record>"]
 
 
